@@ -248,7 +248,9 @@ class Base64CleanerGUI(tk.Tk):
                     for in_path in self.files:
                         base = os.path.splitext(os.path.basename(in_path))[0]
                         out_path = os.path.join(out_dir, base + "_cleaned.epub")
-                        report_path = os.path.join(out_dir, base + "_removed.txt")
+                        logs_dir = os.path.join(out_dir, "logs")
+                        os.makedirs(logs_dir, exist_ok=True)
+                        report_path = os.path.join(logs_dir, base + "_removed.txt")
                         # ensure report is fresh
                         try:
                             if os.path.exists(report_path):
