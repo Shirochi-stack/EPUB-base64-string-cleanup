@@ -6,8 +6,10 @@ a = Analysis(
     ['epub_base64_cleaner.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=['tkinterdnd2'],
+    datas=[
+        ('broom.ico', '.')
+    ],
+    hiddenimports=['PySide6'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -39,4 +41,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='broom.ico',
 )
