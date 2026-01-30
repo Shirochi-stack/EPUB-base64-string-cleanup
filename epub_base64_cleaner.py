@@ -235,8 +235,10 @@ class Base64CleanerGUI(tk.Tk):
             messagebox.showwarning("Missing input", "Please select one or more EPUB files.")
             return
         if not out_dir:
-            messagebox.showwarning("Missing output", "Please select an output folder.")
-            return
+            # Default to the first input's folder when output is empty
+            out_dir = os.path.dirname(self.files[0])
+            self.var_output.set(out_dir)
+            self.log(f"Output folder not set; defaulting to input folder: {out_dir}")
 
         def worker():
             try:
@@ -251,6 +253,8 @@ class Base64CleanerGUI(tk.Tk):
                         logs_dir = os.path.join(out_dir, "logs")
                         os.makedirs(logs_dir, exist_ok=True)
                         report_path = os.path.join(logs_dir, base + "_removed.txt")
+                        self.log(f"Saving: {out_path}")
+                        self.log(f"Report: {report_path}")
                         # ensure report is fresh
                         try:
                             if os.path.exists(report_path):
