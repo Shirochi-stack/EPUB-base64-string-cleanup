@@ -82,6 +82,7 @@ def process_epub(input_path: str, output_path: str, report_path: str, log):
         exts = {".xhtml", ".html", ".htm", ".xml", ".opf", ".ncx"}
         modified = 0
         scanned = 0
+        removed_total = 0
         for root, _, files in os.walk(tmpdir):
             for name in files:
                 ext = os.path.splitext(name)[1].lower()
@@ -93,6 +94,8 @@ def process_epub(input_path: str, output_path: str, report_path: str, log):
                         original = f.read()
                     cleaned, removed = strip_base64_blobs(original)
                     scanned += 1
+                    if removed:
+                        removed_total += len(removed)
                     if cleaned != original:
                         with open(path, "w", encoding="utf-8") as f:
                             f.write(cleaned)
@@ -119,7 +122,8 @@ def process_epub(input_path: str, output_path: str, report_path: str, log):
                         continue
                     out.write(full_path, rel_path, compress_type=zipfile.ZIP_DEFLATED)
 
-    log(f"{os.path.basename(input_path)} -> scanned: {scanned}, modified: {modified}, report: {os.path.basename(report_path)}")
+    log(f"{os.path.basename(input_path)} -> scanned: {scanned}, removed base64 strings: {removed_total}")
+    return input_path, output_path, report_path
 
 
 class CleanerWindow(QtWidgets.QMainWindow):
@@ -221,6 +225,7 @@ class CleanerWindow(QtWidgets.QMainWindow):
         finally:
             self._log_lock.unlock()
 
+
     def browse_input(self):
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self, "Select EPUB(s)", "", "EPUB files (*.epub);;All files (*)"
@@ -278,11 +283,16 @@ class CleanerWindow(QtWidgets.QMainWindow):
         if not self.files:
             QtWidgets.QMessageBox.warning(self, "Missing input", "Please select one or more EPUB files.")
             return
+        base_dir = os.path.dirname(self.files[0])
         if not out_dir:
-            base_dir = os.path.dirname(self.files[0])
             out_dir = os.path.join(base_dir, "Cleaned EPUBs")
             self.output_edit.setText(out_dir)
             self.log(f"Output folder not set; defaulting to: {out_dir}")
+        # If output dir equals input dir, redirect to Cleaned EPUBs to avoid overwrite
+        if os.path.abspath(out_dir) == os.path.abspath(base_dir):
+            out_dir = os.path.join(base_dir, "Cleaned EPUBs")
+            self.output_edit.setText(out_dir)
+            self.log(f"Output folder matched input; using: {out_dir}")
         self._config["last_output_dir"] = out_dir
         save_config(self._config)
 
@@ -299,17 +309,19 @@ class CleanerWindow(QtWidgets.QMainWindow):
                         logs_dir = os.path.join(out_dir, "logs")
                         os.makedirs(logs_dir, exist_ok=True)
                         report_path = os.path.join(logs_dir, base + "_removed.txt")
-                        self.log(f"Saving: {out_path}")
-                        self.log(f"Report: {report_path}")
                         try:
                             if os.path.exists(report_path):
                                 os.remove(report_path)
                         except Exception:
                             pass
+                        label = os.path.basename(in_path)
+                        self.log(f"Processing: {label}")
                         futures.append(ex.submit(process_epub, in_path, out_path, report_path, self.log))
                     for fut in as_completed(futures):
                         try:
-                            fut.result()
+                            in_path, out_path, report_path = fut.result()
+                            self.log(f"Saved: {out_path}")
+                            self.log(f"Report: {report_path}")
                         except Exception as e:
                             self.log(f"Error: {e}")
                 self.log("Done.")
