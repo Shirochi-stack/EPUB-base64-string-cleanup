@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import threading
 import tempfile
@@ -7,6 +8,23 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+
+def load_config():
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_config(cfg: dict):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception:
+        pass
 
 
 def strip_base64_blobs(text: str):
@@ -115,8 +133,13 @@ class Base64CleanerGUI(tk.Tk):
         self.var_output = tk.StringVar()
         self.files = []
         self._log_lock = threading.Lock()
+        self._config = load_config()
 
         self._build_ui()
+        # Load last output folder if present
+        last_out = self._config.get("last_output_dir")
+        if last_out:
+            self.var_output.set(last_out)
 
     def _build_ui(self):
         frm = ttk.Frame(self, padding=12)
@@ -178,6 +201,8 @@ class Base64CleanerGUI(tk.Tk):
         path = filedialog.askdirectory(title="Select output folder")
         if path:
             self.var_output.set(path)
+            self._config["last_output_dir"] = path
+            save_config(self._config)
 
     def on_drop(self, event):
         # event.data may contain a Tcl list of filenames
@@ -239,6 +264,9 @@ class Base64CleanerGUI(tk.Tk):
             out_dir = os.path.dirname(self.files[0])
             self.var_output.set(out_dir)
             self.log(f"Output folder not set; defaulting to input folder: {out_dir}")
+        # Persist last used output folder
+        self._config["last_output_dir"] = out_dir
+        save_config(self._config)
 
         def worker():
             try:
