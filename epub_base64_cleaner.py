@@ -8,7 +8,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+def _get_config_path():
+    base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
+    cfg_dir = os.path.join(base, "EpubBase64Cleaner")
+    try:
+        os.makedirs(cfg_dir, exist_ok=True)
+    except Exception:
+        pass
+    return os.path.join(cfg_dir, "config.json")
+
+CONFIG_PATH = _get_config_path()
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
