@@ -1,13 +1,14 @@
 import os
 import json
 import re
-import threading
 import tempfile
 import zipfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
+
 def _get_config_path():
     base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
     cfg_dir = os.path.join(base, "EpubBase64Cleaner")
@@ -17,7 +18,9 @@ def _get_config_path():
         pass
     return os.path.join(cfg_dir, "config.json")
 
+
 CONFIG_PATH = _get_config_path()
+
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
@@ -27,6 +30,7 @@ def load_config():
         except Exception:
             return {}
     return {}
+
 
 def save_config(cfg: dict):
     try:
@@ -40,7 +44,6 @@ def strip_base64_blobs(text: str):
     if not text:
         return text, []
     removed = []
-    # Remove hidden paragraphs with base64 (common pattern)
     removed += re.findall(
         r"<p\s+style=['\"]height:\s*0px;[^>]*>.*?</p>",
         text,
@@ -52,7 +55,6 @@ def strip_base64_blobs(text: str):
         text,
         flags=re.DOTALL | re.IGNORECASE,
     )
-    # Remove inline base64 data URLs
     removed += re.findall(
         r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
         text,
@@ -64,7 +66,6 @@ def strip_base64_blobs(text: str):
         text,
         flags=re.IGNORECASE,
     )
-    # Remove embedded base64-ish tokens (>=40 chars)
     removed += re.findall(r"[A-Za-z0-9+/=]{40,}", text)
     text = re.sub(r"[A-Za-z0-9+/=]{40,}", "", text)
     return text, removed
@@ -78,7 +79,6 @@ def process_epub(input_path: str, output_path: str, report_path: str, log):
         with zipfile.ZipFile(input_path, "r") as zf:
             zf.extractall(tmpdir)
 
-        # Process text files likely to contain base64 blobs
         exts = {".xhtml", ".html", ".htm", ".xml", ".opf", ".ncx"}
         modified = 0
         scanned = 0
@@ -97,7 +97,6 @@ def process_epub(input_path: str, output_path: str, report_path: str, log):
                         with open(path, "w", encoding="utf-8") as f:
                             f.write(cleaned)
                         modified += 1
-                        # Log removed content to report file
                         if removed:
                             with open(report_path, "a", encoding="utf-8") as rf:
                                 rel = os.path.relpath(path, tmpdir)
@@ -108,7 +107,6 @@ def process_epub(input_path: str, output_path: str, report_path: str, log):
                 except Exception:
                     continue
 
-        # Rebuild EPUB (mimetype must be first and uncompressed)
         with zipfile.ZipFile(output_path, "w") as out:
             mimetype_path = os.path.join(tmpdir, "mimetype")
             if os.path.exists(mimetype_path):
@@ -124,156 +122,167 @@ def process_epub(input_path: str, output_path: str, report_path: str, log):
     log(f"{os.path.basename(input_path)} -> scanned: {scanned}, modified: {modified}, report: {os.path.basename(report_path)}")
 
 
-class Base64CleanerGUI(tk.Tk):
+class CleanerWindow(QtWidgets.QMainWindow):
     def __init__(self):
-        # Try to enable drag-and-drop if tkinterdnd2 is available
-        self._dnd_enabled = False
-        try:
-            from tkinterdnd2 import TkinterDnD, DND_FILES
-            self._DND_FILES = DND_FILES
-            TkinterDnD.Tk.__init__(self)
-            self._dnd_enabled = True
-        except Exception:
-            super().__init__()
-            self._DND_FILES = None
-        self.title("EPUB Base64 Cleaner")
-        self.geometry("640x360")
-        self.minsize(520, 300)
-        self.var_output = tk.StringVar()
-        self.files = []
-        self._log_lock = threading.Lock()
+        super().__init__()
         self._config = load_config()
+        self.files = []
+        self._log_lock = QtCore.QMutex()
+
+        self.setWindowTitle("EPUB Base64 Cleaner")
+        icon_path = os.path.join(os.path.dirname(__file__), "broom.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QtGui.QIcon(icon_path))
+        screen = QtGui.QGuiApplication.primaryScreen().availableGeometry()
+        w = int(screen.width() * 0.45)
+        h = int(screen.height() * 0.45)
+        self.resize(w, h)
+        self.setMinimumSize(int(screen.width() * 0.35), int(screen.height() * 0.35))
 
         self._build_ui()
-        # Load last output folder if present
         last_out = self._config.get("last_output_dir")
         if last_out:
-            self.var_output.set(last_out)
+            self.output_edit.setText(last_out)
+
+        self.setAcceptDrops(True)
 
     def _build_ui(self):
-        frm = ttk.Frame(self, padding=12)
-        frm.pack(fill="both", expand=True)
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        layout = QtWidgets.QVBoxLayout(central)
 
-        row_in = ttk.Frame(frm)
-        row_in.pack(fill="x", pady=(0, 8))
-        ttk.Label(row_in, text="Input EPUB(s)").pack(side="left")
-        ttk.Button(row_in, text="Browse...", command=self.browse_input).pack(side="right")
+        row_in = QtWidgets.QHBoxLayout()
+        row_in.addWidget(QtWidgets.QLabel("Input EPUB(s)"))
+        row_in.addStretch(1)
+        browse_in = QtWidgets.QPushButton("Browse...")
+        browse_in.clicked.connect(self.browse_input)
+        row_in.addWidget(browse_in)
+        layout.addLayout(row_in)
 
-        row_out = ttk.Frame(frm)
-        row_out.pack(fill="x", pady=(0, 8))
-        ttk.Label(row_out, text="Output Folder").pack(side="left")
-        ttk.Entry(row_out, textvariable=self.var_output).pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(row_out, text="Browse...", command=self.browse_output).pack(side="right")
+        row_out = QtWidgets.QHBoxLayout()
+        row_out.addWidget(QtWidgets.QLabel("Output Folder"))
+        self.output_edit = QtWidgets.QLineEdit()
+        row_out.addWidget(self.output_edit, 1)
+        browse_out = QtWidgets.QPushButton("Browse...")
+        browse_out.clicked.connect(self.browse_output)
+        row_out.addWidget(browse_out)
+        layout.addLayout(row_out)
 
-        btn_row = ttk.Frame(frm)
-        btn_row.pack(pady=6, fill="x")
-        btn_run = ttk.Button(btn_row, text="Clean EPUB", command=self.run_clean)
-        btn_run.pack(side="left")
-        ttk.Button(btn_row, text="Remove Selected", command=self.remove_selected).pack(side="left", padx=6)
-        ttk.Button(btn_row, text="Clear List", command=self.clear_list).pack(side="left")
+        btn_row = QtWidgets.QHBoxLayout()
+        clean_btn = QtWidgets.QPushButton("Clean EPUB")
+        clean_btn.clicked.connect(self.run_clean)
+        btn_row.addWidget(clean_btn)
+        remove_btn = QtWidgets.QPushButton("Remove Selected")
+        remove_btn.clicked.connect(self.remove_selected)
+        btn_row.addWidget(remove_btn)
+        clear_btn = QtWidgets.QPushButton("Clear List")
+        clear_btn.clicked.connect(self.clear_list)
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
 
-        self.files_list = tk.Listbox(frm, height=6)
-        self.files_list.pack(fill="both", expand=False, pady=(4, 6))
-        if self._dnd_enabled:
-            self.files_list.drop_target_register(self._DND_FILES)
-            self.files_list.dnd_bind("<<Drop>>", self.on_drop)
-        self._build_context_menu()
-        self.log_text = tk.Text(frm, height=10, state="disabled", wrap="word")
-        self.log_text.pack(fill="both", expand=True, pady=(8, 0))
-        if not self._dnd_enabled:
-            self.log("Drag-and-drop disabled (install tkinterdnd2 to enable).")
+        self.list_widget = QtWidgets.QListWidget()
+        self.list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.list_widget.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self.show_context_menu)
+        layout.addWidget(self.list_widget)
+
+        self.log_text = QtWidgets.QTextEdit()
+        self.log_text.setReadOnly(True)
+        layout.addWidget(self.log_text, 1)
+
+        self._apply_dark_theme()
+
+    def _apply_dark_theme(self):
+        palette = QtGui.QPalette()
+        palette.setColor(QtGui.QPalette.Window, QtGui.QColor(30, 30, 30))
+        palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor(230, 230, 230))
+        palette.setColor(QtGui.QPalette.Base, QtGui.QColor(43, 43, 43))
+        palette.setColor(QtGui.QPalette.Text, QtGui.QColor(230, 230, 230))
+        palette.setColor(QtGui.QPalette.Button, QtGui.QColor(51, 51, 51))
+        palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(230, 230, 230))
+        palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(68, 68, 68))
+        palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(255, 255, 255))
+        self.setPalette(palette)
 
     def log(self, msg: str):
         # microsecond backoff lock to avoid contention from parallel threads
         while True:
-            acquired = self._log_lock.acquire(False)
-            if acquired:
+            if self._log_lock.tryLock():
                 break
             time.sleep(0.000001)
         try:
-            self.log_text.configure(state="normal")
-            self.log_text.insert("end", msg + "\n")
-            self.log_text.see("end")
-            self.log_text.configure(state="disabled")
+            QtCore.QMetaObject.invokeMethod(
+                self.log_text,
+                "append",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, msg),
+            )
         finally:
-            self._log_lock.release()
+            self._log_lock.unlock()
 
     def browse_input(self):
-        paths = filedialog.askopenfilenames(
-            title="Select EPUB(s)",
-            filetypes=[("EPUB files", "*.epub"), ("All files", "*.*")]
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self, "Select EPUB(s)", "", "EPUB files (*.epub);;All files (*)"
         )
         if paths:
-            self.add_files(list(paths))
+            self.add_files(paths)
 
     def browse_output(self):
-        path = filedialog.askdirectory(title="Select output folder")
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select output folder")
         if path:
-            self.var_output.set(path)
+            self.output_edit.setText(path)
             self._config["last_output_dir"] = path
             save_config(self._config)
-
-    def on_drop(self, event):
-        # event.data may contain a Tcl list of filenames
-        data = event.data
-        if not data:
-            return
-        try:
-            files = self.tk.splitlist(data)
-        except Exception:
-            files = [p.strip() for p in data.split() if p.strip()]
-        self.add_files(list(files))
 
     def add_files(self, paths):
         added = 0
         for p in paths:
-            p = p.strip().strip("{}")
             if not p or not p.lower().endswith(".epub"):
                 continue
             if p not in self.files:
                 self.files.append(p)
-                self.files_list.insert("end", p)
+                self.list_widget.addItem(p)
                 added += 1
         if added:
             self.log(f"Added {added} file(s).")
 
-    def _build_context_menu(self):
-        self.menu = tk.Menu(self, tearoff=0)
-        self.menu.add_command(label="Remove Selected", command=self.remove_selected)
-        self.menu.add_command(label="Clear List", command=self.clear_list)
-        self.files_list.bind("<Button-3>", self.show_context_menu)
-
-    def show_context_menu(self, event):
-        try:
-            self.menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.menu.grab_release()
+    def show_context_menu(self, pos):
+        menu = QtWidgets.QMenu(self)
+        menu.addAction("Remove Selected", self.remove_selected)
+        menu.addAction("Clear List", self.clear_list)
+        menu.exec(self.list_widget.mapToGlobal(pos))
 
     def remove_selected(self):
-        sel = list(self.files_list.curselection())
-        if not sel:
-            return
-        for idx in reversed(sel):
-            path = self.files_list.get(idx)
+        for item in self.list_widget.selectedItems():
+            path = item.text()
             if path in self.files:
                 self.files.remove(path)
-            self.files_list.delete(idx)
+            self.list_widget.takeItem(self.list_widget.row(item))
 
     def clear_list(self):
         self.files.clear()
-        self.files_list.delete(0, "end")
+        self.list_widget.clear()
+
+    def dragEnterEvent(self, event: QtGui.QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QtGui.QDropEvent):
+        urls = event.mimeData().urls()
+        paths = [u.toLocalFile() for u in urls if u.isLocalFile()]
+        self.add_files(paths)
 
     def run_clean(self):
-        out_dir = self.var_output.get().strip()
+        out_dir = self.output_edit.text().strip()
         if not self.files:
-            messagebox.showwarning("Missing input", "Please select one or more EPUB files.")
+            QtWidgets.QMessageBox.warning(self, "Missing input", "Please select one or more EPUB files.")
             return
         if not out_dir:
-            # Default to the first input's folder when output is empty
-            out_dir = os.path.dirname(self.files[0])
-            self.var_output.set(out_dir)
-            self.log(f"Output folder not set; defaulting to input folder: {out_dir}")
-        # Persist last used output folder
+            base_dir = os.path.dirname(self.files[0])
+            out_dir = os.path.join(base_dir, "Cleaned EPUBs")
+            self.output_edit.setText(out_dir)
+            self.log(f"Output folder not set; defaulting to: {out_dir}")
         self._config["last_output_dir"] = out_dir
         save_config(self._config)
 
@@ -286,13 +295,12 @@ class Base64CleanerGUI(tk.Tk):
                     futures = []
                     for in_path in self.files:
                         base = os.path.splitext(os.path.basename(in_path))[0]
-                        out_path = os.path.join(out_dir, base + "_cleaned.epub")
+                        out_path = os.path.join(out_dir, base + ".epub")
                         logs_dir = os.path.join(out_dir, "logs")
                         os.makedirs(logs_dir, exist_ok=True)
                         report_path = os.path.join(logs_dir, base + "_removed.txt")
                         self.log(f"Saving: {out_path}")
                         self.log(f"Report: {report_path}")
-                        # ensure report is fresh
                         try:
                             if os.path.exists(report_path):
                                 os.remove(report_path)
@@ -308,9 +316,24 @@ class Base64CleanerGUI(tk.Tk):
             except Exception as e:
                 self.log(f"Error: {e}")
 
-        threading.Thread(target=worker, daemon=True).start()
+        QtCore.QThreadPool.globalInstance().start(_Worker(worker))
+
+
+class _Worker(QtCore.QRunnable):
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def run(self):
+        self.fn()
+
+
+def main():
+    app = QtWidgets.QApplication([])
+    win = CleanerWindow()
+    win.show()
+    app.exec()
 
 
 if __name__ == "__main__":
-    app = Base64CleanerGUI()
-    app.mainloop()
+    main()
